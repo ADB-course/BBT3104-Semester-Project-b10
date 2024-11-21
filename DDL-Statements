@@ -1,0 +1,165 @@
+10.1 Tables without Check Constraints
+CREATE TABLE Customer (
+    CustomerID INT AUTO_INCREMENT PRIMARY KEY,
+    Name VARCHAR(100),
+    Email VARCHAR(100) UNIQUE,
+    ContactInformation VARCHAR(255)
+);
+
+CREATE TABLE Product (
+    ProductID INT AUTO_INCREMENT PRIMARY KEY,
+    Name VARCHAR(100),
+    Description TEXT,
+    Price DECIMAL(10, 2)
+);
+
+CREATE TABLE OrderEntity (
+    OrderID INT AUTO_INCREMENT PRIMARY KEY,
+    CustomerID INT,
+    OrderDate TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    TotalAmount DECIMAL(10, 2),
+    OrderStatus TINYINT,
+    FOREIGN KEY (CustomerID) REFERENCES Customer(CustomerID)
+);
+
+CREATE TABLE OrderProduct (
+    OrderID INT,
+    ProductID INT,
+    Quantity INT,
+    PRIMARY KEY (OrderID, ProductID),
+    FOREIGN KEY (OrderID) REFERENCES OrderEntity(OrderID),
+    FOREIGN KEY (ProductID) REFERENCES Product(ProductID)
+);
+
+CREATE TABLE Transaction (
+    TransactionID VARCHAR(10) PRIMARY KEY,
+    Date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    Amount DECIMAL(10, 2),
+    PaymentMethod VARCHAR(50),
+    OrderID INT,
+    FOREIGN KEY (OrderID) REFERENCES OrderEntity(OrderID)
+);
+10.2 Normal Triggers
+-- Before Insert trigger on Customer Entity
+DELIMITER //
+CREATE TRIGGER CheckUniqueContactInfo
+BEFORE INSERT ON Customer
+FOR EACH ROW
+BEGIN
+    IF EXISTS (SELECT 1 FROM Customer WHERE ContactInformation = NEW.ContactInformation) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Contact information already exists';
+    END IF;
+END;//
+DELIMITER ;
+
+-- After Update Trigger on Product Entity
+DELIMITER //
+CREATE TRIGGER TrackStockChanges
+AFTER UPDATE ON Product
+FOR EACH ROW
+BEGIN
+    INSERT INTO ProductStockHistory (ProductID, PreviousQuantity, NewQuantity, Timestamp)
+    VALUES (OLD.ProductID, OLD.QuantityInStock, NEW.QuantityInStock, NOW());
+END;//
+DELIMITER ;
+10.3 Tables with Check Constraints
+ALTER TABLE Product ADD CONSTRAINT CK_Product_Price CHECK (Price > 0);
+ALTER TABLE CustomerFeedback ADD CONSTRAINT CK_Feedback_Rating CHECK (Rating BETWEEN 1 AND 5);
+10.4 Temporal Triggers
+-- Before Update Trigger on Transaction Entity
+DELIMITER //
+CREATE TRIGGER TrackTransactionStatusChanges
+BEFORE UPDATE ON Transaction
+FOR EACH ROW
+BEGIN
+    INSERT INTO TransactionHistory (TransactionID, OldStatus, NewStatus, Timestamp)
+    VALUES (OLD.TransactionID, OLD.Status, NEW.Status, NOW());
+END;//
+DELIMITER ;
+
+-- After Insert Trigger on Order Entity
+DELIMITER //
+CREATE TRIGGER SetDefaultDeliveryDate
+AFTER INSERT ON OrderEntity
+FOR EACH ROW
+BEGIN
+    IF NEW.ExpectedDeliveryDate IS NULL THEN
+        SET NEW.ExpectedDeliveryDate = DATE_ADD(NEW.OrderDate, INTERVAL 3 DAY);
+    END IF;
+END;//
+DELIMITER ;
+10.5 Stored Routines as Procedures
+DELIMITER //
+
+CREATE PROCEDURE GetTopMerchants()
+BEGIN
+    SELECT * FROM Merchant ORDER BY TransactionVolume DESC LIMIT 10;
+END;//
+
+CREATE PROCEDURE CalculateMonthlyRevenue()
+BEGIN
+    SELECT SUM(Amount) AS TotalRevenue FROM Transaction WHERE EXTRACT(MONTH FROM Date) = MONTH(CURRENT_DATE);
+END;//
+10.6 Stored Routines as Functions
+DELIMITER //
+
+CREATE FUNCTION GetCustomerBalance(CustomerID INT) RETURNS DECIMAL(10, 2)
+BEGIN
+    DECLARE Balance DECIMAL(10, 2);
+    SELECT SUM(Amount) INTO Balance FROM Transaction WHERE CustomerID = CustomerID;
+    RETURN Balance;
+END;//
+
+CREATE FUNCTION GetTransactionCountByMonth(Month INT) RETURNS INT
+BEGIN
+    DECLARE Count INT;
+    SELECT COUNT(*) INTO Count FROM Transaction WHERE EXTRACT(MONTH FROM Date) = Month;
+    RETURN Count;
+END;//
+10.7 Views
+CREATE VIEW ActivePartnershipsView AS
+SELECT * FROM Partnership WHERE EndDate > CURRENT_DATE;
+
+CREATE VIEW TopPerformingMerchantsView AS
+SELECT * FROM Merchant ORDER BY (TransactionVolume + Revenue) DESC LIMIT 10;
+10.8 Database Transactions
+DELIMITER //
+
+CREATE PROCEDURE DepositTransaction(
+    IN ClientID INT,
+    IN TransactionID VARCHAR(10),
+    IN DepositAmount DECIMAL(10, 2)
+)
+BEGIN
+    DECLARE Balance DECIMAL(10, 2);
+
+    -- Step 1: Verify Deposit Amount
+    IF DepositAmount <= 0 THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'Invalid deposit amount';
+        LEAVE;
+    END IF;
+
+    -- Step 2: Record Transaction
+    INSERT INTO Transactions (TransactionID, Date, Amount, OrderID, PaymentMethod)
+    VALUES (TransactionID, NOW(), DepositAmount, NULL, 'Deposit');
+
+    -- Step 3: Record Payment Details
+    INSERT INTO TransactionDetails (TransactionID, Amount)
+    VALUES (TransactionID, DepositAmount);
+
+    -- Step 4: Update Account Balance
+    SELECT Balance INTO Balance FROM Accounts WHERE ClientID = ClientID;
+    SET Balance = Balance + DepositAmount;
+    UPDATE Accounts SET Balance = Balance WHERE ClientID = ClientID;
+
+    -- Step 5: Confirm Transaction Completion
+    SELECT CONCAT('Deposit successful. New balance for ClientID ', ClientID, ' is ', Balance);
+
+    -- Step 6: Handle Unregistered Client
+    IF NOT EXISTS (SELECT 1 FROM Clients WHERE ClientID = ClientID) THEN
+        INSERT INTO Clients (ClientID, Name)
+        VALUES (ClientID, 'New Customer');
+        CALL DepositTransaction(ClientID, TransactionID, DepositAmount);
+    END IF;
+END;//
+DELIMITER ;
